@@ -15,3 +15,8 @@ coverage.db
 
 # macOS
 .DS_Store
+
+# Shikhu local setup (not shared)
+.quizignore
+.claude/
+.agents/
