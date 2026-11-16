@@ -5,6 +5,7 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.163.1",
     "modal>=1.6.4",
+    "pyjwt[crypto]>=2.15.1",
 ]
 
 [dependency-groups]
