@@ -1,7 +1,8 @@
 """Token estimator API, deployed on Modal.
 
-Piece 3: agents discover where to sign up (WorkOS AuthKit), and every call
-to /estimate needs a verified WorkOS agent token. No usage limits yet (piece 4).
+Agents discover where to sign up (WorkOS AuthKit), every call to /estimate
+needs a verified WorkOS agent token, and unclaimed agents get a few free
+calls before they must ask their human to claim them.
 
 Run locally:   uv run uvicorn app:web_app --reload
 Dev on Modal:  uv run modal serve --env workos-demo app.py
@@ -12,6 +13,7 @@ Live URL: https://arjunpatel7-workos-demo--token-estimator-web.us-east.modal.run
 
 import os
 import urllib.request
+from datetime import date
 from typing import Annotated
 
 import jwt
@@ -42,6 +44,14 @@ USER_AGENT = "token-estimator-demo/0.1"
 TRIAL_SCOPE = "estimate:trial"  # unclaimed agents
 FULL_SCOPE = "estimate"         # claimed agents
 
+# The free trial for unclaimed agents. Change these for a live demo.
+TRIAL_CALLS = int(os.environ.get("TRIAL_CALLS", "3"))           # per agent
+DAILY_TRIAL_CAP = int(os.environ.get("DAILY_TRIAL_CAP", "500"))  # all unclaimed agents
+
+# Call counts, kept in Modal's shared key-value store so they survive restarts.
+# It behaves like a dict, so tests can swap in a plain {}.
+usage = modal.Dict.from_name("token-estimator-usage", create_if_missing=True)
+
 # Fetches WorkOS's public signing keys once and caches them.
 jwks_client = jwt.PyJWKClient(
     f"{AUTHKIT_DOMAIN}/oauth2/jwks", headers={"User-Agent": USER_AGENT}
@@ -71,15 +81,30 @@ def home():
 
 # --- Discovery: how an agent finds out where to sign up ---
 
+def auth_md_intro() -> str:
+    """Our own note on top of WorkOS's instructions: the trial rules."""
+    return (
+        "# Token Estimator: how access works\n\n"
+        f"- Register anonymously (below) and you get {TRIAL_CALLS} free estimates. "
+        "No human needed.\n"
+        "- After that, `POST /estimate` returns 403 `claim_required`. Ask your human "
+        "to claim you (step 3 below). Claimed agents have unlimited use.\n"
+        f"- Call it like this: `POST {PUBLIC_URL}/estimate` with "
+        "`Authorization: Bearer <access_token>` and JSON `{\"task\": \"...\"}`.\n\n"
+        "---\n\n"
+    )
+
+
 @web_app.get("/auth.md", response_class=PlainTextResponse)
 def auth_md():
-    """Serve WorkOS's agent instructions, fetched live so they match the dashboard."""
+    """Serve WorkOS's agent instructions, fetched live so they match the dashboard,
+    with our trial rules on top."""
     source = f"{AUTHKIT_DOMAIN}/agent/auth.md"
     # WorkOS blocks Python's default User-Agent ("Python-urllib"), so name ourselves.
     req = urllib.request.Request(source, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
-            return r.read().decode()
+            return auth_md_intro() + r.read().decode()
     except OSError:
         raise HTTPException(
             status_code=502,
@@ -156,9 +181,53 @@ def verify_token(request: Request) -> dict:
     return claims
 
 
+# --- The free trial ---
+
+def claim_required(message: str) -> HTTPException:
+    """A 403 telling an unclaimed agent to bring in its human."""
+    return HTTPException(
+        status_code=403,
+        detail={
+            "error": "claim_required",
+            "message": f"{message} Ask your human to claim you: follow step 3 of "
+                       f"{PUBLIC_URL}/auth.md (they open a link, sign in, and read you a "
+                       "code). Claimed agents have unlimited use. Don't retry until "
+                       "you're claimed.",
+        },
+        headers={"WWW-Authenticate": f'Bearer error="insufficient_scope", '
+                                     f'scope="{FULL_SCOPE}", '
+                                     f'resource_metadata="{METADATA_URL}"'},
+    )
+
+
+def enforce_trial(claims: Annotated[dict, Depends(verify_token)]) -> dict:
+    """Let claimed agents through; count unclaimed agents' free calls."""
+    if claims["claimed"]:
+        return claims
+
+    agent_key = f"agent:{claims['sub']}"
+    day_key = f"day:{date.today().isoformat()}"  # a new key each day, so it resets itself
+
+    if usage.get(day_key, 0) >= DAILY_TRIAL_CAP:
+        raise claim_required("Free trial calls are used up for today.")
+    used = usage.get(agent_key, 0)
+    if used >= TRIAL_CALLS:
+        raise claim_required(f"This agent has used its {TRIAL_CALLS} free estimates.")
+
+    # Not atomic: two calls at the same instant could both slip through.
+    # Fine for a trial; production would use Redis INCR or a SQL UPDATE.
+    usage[agent_key] = used + 1
+    usage[day_key] = usage.get(day_key, 0) + 1
+    claims["free_calls_left"] = TRIAL_CALLS - used - 1
+    return claims
+
+
 @web_app.post("/estimate")
-def estimate(body: EstimateRequest, claims: Annotated[dict, Depends(verify_token)]):
-    return estimate_tokens(body.task)
+def estimate(body: EstimateRequest, claims: Annotated[dict, Depends(enforce_trial)]):
+    result = estimate_tokens(body.task)
+    if not claims["claimed"]:
+        result["free_calls_left"] = claims["free_calls_left"]
+    return result
 
 
 # --- Modal wrapping (only used when deploying to Modal) ---
