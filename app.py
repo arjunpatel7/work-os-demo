@@ -51,10 +51,9 @@ CLIENT_ID = os.environ.get("WORKOS_CLIENT_ID", "client_01M7GPP0885C97QVK8CAY04YX
 METADATA_URL = f"{PUBLIC_URL}/.well-known/oauth-protected-resource"
 USER_AGENT = "docs-search-demo/0.1"
 
-# Permissions (set in the WorkOS dashboard) that may call /search. They keep the
-# names from when this was a token estimator; renaming means new WorkOS permissions.
-TRIAL_SCOPE = "estimate:trial"  # unclaimed agents
-FULL_SCOPE = "estimate"         # claimed agents
+# Permissions (set in the WorkOS dashboard) that may call /search.
+TRIAL_SCOPE = "jevsearch-trial"  # unclaimed agents
+FULL_SCOPE = "jevsearch-full"    # claimed agents
 
 # The free trial for unclaimed agents. Change these for a live demo.
 TRIAL_CALLS = int(os.environ.get("TRIAL_CALLS", "3"))           # per agent

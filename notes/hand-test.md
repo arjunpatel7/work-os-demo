@@ -45,6 +45,7 @@ Header: `alg: RS256`, with a `kid` to look up in the JWKS.
 8. The WorkOS MCP server has no operations for Agent Registration settings.
 9. Agent Registration tokens include `sub_profile: "ai_agent"`, which the docs only list for Agent Auth tokens.
 10. `https://<authkit>/agent/auth.md` returns 403 to Python's default User-Agent (`Python-urllib`) and 200 to others, so a server proxying it in Python must set its own User-Agent. The docs' proxy examples are all Node, nginx or Cloudflare, so they never hit this.
+11. Agent permissions need two setup steps in two places. First, enable the permission for organization API keys (Authorization → Configuration). Then pick it under Agents → Configuration → Trust level permissions. The docs mention the first step in one sentence, and the trust-level lists are simply empty until it's done. Permission slugs can't be edited, so a rename means delete, re-create and redo both steps. Agents that already hold the old slug lose access.
 
 ## Still to check
 

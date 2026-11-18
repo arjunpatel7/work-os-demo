@@ -35,7 +35,11 @@ This is for anyone shipping an API or tool for agents who wants agents to self-s
 In the WorkOS dashboard, for your environment:
 
 1. **Agent identity types:** enable **Anonymous** and **Service auth**. Service auth is required for claims.
-2. **Create two permissions**, enabled for organization API keys. In this repo they are `estimate:trial` and `estimate`, names left over from an earlier version of the tool. Give the trial one to **untrusted / unverified** agents and the full one to **trusted / verified** (claimed) agents.
+2. **Create two permissions.** In this repo they are `jevsearch-trial` and `jevsearch-full`. This takes two separate steps:
+   - **Allow them on organization API keys** (Authorization → Configuration → Organization API key permissions). Only permissions enabled here can be given to agents; until then, the next step's lists won't show them.
+   - **Map them by trust level** (Agents → Configuration → Trust level permissions). Put the trial permission under **Untrusted** (anonymous agents) and the full one under **Trusted** (claimed agents). The dashboard may label these unverified and verified.
+
+   Renaming a permission means deleting it and creating a new one (the slug can't be edited), then doing both steps again.
 3. **OAuth well-known discovery** (in the Agents configuration): set this API's protected-resource metadata URL.
 4. **Authentication:** enable a sign-in method the claiming human can use without a password, such as Google or Magic Auth.
 
