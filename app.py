@@ -49,7 +49,7 @@ PUBLIC_URL = os.environ.get(
 CLIENT_ID = os.environ.get("WORKOS_CLIENT_ID", "client_01M7GPP0885C97QVK8CAY04YXE")
 
 METADATA_URL = f"{PUBLIC_URL}/.well-known/oauth-protected-resource"
-USER_AGENT = "token-estimator-demo/0.1"
+USER_AGENT = "docs-search-demo/0.1"
 
 # Permissions (set in the WorkOS dashboard) that may call /search. They keep the
 # names from when this was a token estimator; renaming means new WorkOS permissions.
@@ -157,10 +157,10 @@ def protected_resource_metadata():
     """Tells agents which server issues tokens for this API (RFC 9728)."""
     return {
         "resource": PUBLIC_URL,
-        "resource_name": "Token Estimator",
+        "resource_name": "Docs Search",
         "authorization_servers": [AUTHKIT_DOMAIN],
         "bearer_methods_supported": ["header"],
-        "scopes_supported": ["estimate:trial", "estimate"],
+        "scopes_supported": [TRIAL_SCOPE, FULL_SCOPE],
     }
 
 
@@ -237,9 +237,12 @@ def claim_required(message: str) -> HTTPException:
         detail={
             "error": "claim_required",
             "message": f"{message} Ask your human to claim you: follow step 3 of "
-                       f"{PUBLIC_URL}/auth.md (they open a link, sign in, and read you a "
-                       "code). Claimed agents have unlimited use. Don't retry until "
-                       "you're claimed.",
+                       f"{PUBLIC_URL}/auth.md. Ask them for their email first; the claim "
+                       "request needs it as login_hint. They open a link, sign in, and "
+                       "read you a code. Claimed agents have unlimited use. Once the "
+                       "claim is complete, get a fresh access token (step 4): your "
+                       "current one still carries trial permissions. Don't retry "
+                       "until then.",
         },
         headers={"WWW-Authenticate": f'Bearer error="insufficient_scope", '
                                      f'scope="{FULL_SCOPE}", '
@@ -281,6 +284,12 @@ def count_trial_call(claims: dict) -> int:
     usage[day_key] = usage.get(day_key, 0) + 1
     return TRIAL_CALLS - used
 
+
+# --- Your tool goes here ---
+# Everything above is the reusable agent free trial: discovery, token checks,
+# trial counting and the claim handoff. To put it in front of your own API,
+# swap the docs_search call below (and the request/response models) for your
+# tool, and protect any new route with Depends(enforce_trial).
 
 @web_app.post("/search", response_model=SearchResponse, response_model_exclude_none=True)
 def search(body: SearchRequest, claims: Annotated[dict, Depends(enforce_trial)]):

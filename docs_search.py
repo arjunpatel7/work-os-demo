@@ -22,7 +22,7 @@ TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone"
 MODEL = "jev-1.14.0"           # pinned, so thresholds don't shift under us
 MAX_OPTIONS = 255               # Choice limit
 KEEP_PER_HEAT = 3               # survivors from each heat into the final
-USER_AGENT = "token-estimator-demo/0.1"
+USER_AGENT = "docs-search-demo/0.1"
 CHUNK_CHARS = 2_500             # trim very long chunks
 MAX_HEAT_CHARS = 80_000         # ~20k tokens: Jev allows 32k per question (state + question)
 
