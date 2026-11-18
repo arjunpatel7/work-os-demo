@@ -1,6 +1,9 @@
-"""Token estimator API, deployed on Modal.
+"""Docs search API for agents, deployed on Modal.
 
-Agents discover where to sign up (WorkOS AuthKit), every call to /estimate
+POST /search finds the docs sections that answer a question, using TypeSafe's
+Jev to pick pages and then chunks from a site's llms.txt (see docs_search.py).
+
+Agents discover where to sign up (WorkOS AuthKit), every call to /search
 needs a verified WorkOS agent token, and unclaimed agents get a few free
 calls before they must ask their human to claim them.
 
@@ -14,7 +17,7 @@ Live URL: https://arjunpatel7-workos-demo--token-estimator-web.us-east.modal.run
 import os
 import urllib.request
 from datetime import date
-from typing import Annotated
+from typing import Annotated, Literal
 
 import jwt
 import modal
@@ -23,7 +26,14 @@ from fastapi.responses import PlainTextResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
-from estimator import estimate_tokens
+from docs_search import search as docs_search
+
+# Docs sites agents can search. Only these are fetched: callers pick a name,
+# never a URL. docs_search also refuses links that leave each index's own site.
+SITES = {
+    "workos": "https://workos.com/docs/llms.txt",
+    "typesafe": "https://docs.typesafe.ai/llms.txt",
+}
 
 # --- Settings (public addresses, not secrets) ---
 
@@ -41,7 +51,8 @@ CLIENT_ID = os.environ.get("WORKOS_CLIENT_ID", "client_01M7GPP0885C97QVK8CAY04YX
 METADATA_URL = f"{PUBLIC_URL}/.well-known/oauth-protected-resource"
 USER_AGENT = "token-estimator-demo/0.1"
 
-# Permissions (set in the WorkOS dashboard) that may call /estimate.
+# Permissions (set in the WorkOS dashboard) that may call /search. They keep the
+# names from when this was a token estimator; renaming means new WorkOS permissions.
 TRIAL_SCOPE = "estimate:trial"  # unclaimed agents
 FULL_SCOPE = "estimate"         # claimed agents
 
@@ -61,20 +72,32 @@ jwks_client = jwt.PyJWKClient(
 # --- The web app (plain FastAPI, runs anywhere) ---
 
 web_app = FastAPI(
-    title="Token Estimator",
-    description="Estimates how many tokens a coding agent will spend on a task.",
+    title="Docs Search",
+    description="Returns the docs sections that answer a question, picked by TypeSafe's Jev.",
 )
 
 
-class EstimateRequest(BaseModel):
-    task: str = Field(..., min_length=1, max_length=4_000,
-                      description="A description of the coding task.")
+class SearchRequest(BaseModel):
+    question: str = Field(..., min_length=1, max_length=1_000,
+                          description="What you want to know.")
+    site: Literal["workos", "typesafe"] = Field(description="Which docs to search.")
 
 
-class EstimateResponse(BaseModel):
-    estimated_tokens: int = Field(description="Estimated tokens the task will take.")
-    model: str = Field(description="Which model produced the estimate.")
-    note: str
+class SearchResult(BaseModel):
+    url: str = Field(description="The docs page the chunk comes from.")
+    relevance: float = Field(description="How well this chunk answers, 0 to 1.")
+    text: str = Field(description="The chunk, with its heading path first.")
+
+
+class SearchResponse(BaseModel):
+    question: str
+    verdict: Literal["answered", "partial", "not_found"] = Field(
+        description="Whether the docs answer the question. Results are empty for not_found."
+    )
+    score: float = Field(description="Probability the returned chunks answer it.")
+    results: list[SearchResult]
+    pages_read: list[str]
+    seconds: float
     free_calls_left: int | None = Field(
         None, description="Free calls left. Only present for unclaimed agents."
     )
@@ -89,8 +112,8 @@ def health():
 @web_app.get("/")
 def home():
     return {
-        "name": "Token Estimator",
-        "usage": "POST /estimate with {\"task\": \"<what you are about to do>\"}",
+        "name": "Docs Search",
+        "usage": "POST /search with {\"question\": \"...\", \"site\": \"workos\" | \"typesafe\"}",
         "auth": f"Agents: read {PUBLIC_URL}/auth.md to get a token.",
     }
 
@@ -100,13 +123,14 @@ def home():
 def auth_md_intro() -> str:
     """Our own note on top of WorkOS's instructions: the trial rules."""
     return (
-        "# Token Estimator: how access works\n\n"
-        f"- Register anonymously (below) and you get {TRIAL_CALLS} free estimates. "
+        "# Docs Search: how access works\n\n"
+        f"- Register anonymously (below) and you get {TRIAL_CALLS} free searches. "
         "No human needed.\n"
-        "- After that, `POST /estimate` returns 403 `claim_required`. Ask your human "
+        "- After that, `POST /search` returns 403 `claim_required`. Ask your human "
         "to claim you (step 3 below). Claimed agents have unlimited use.\n"
-        f"- Call it like this: `POST {PUBLIC_URL}/estimate` with "
-        "`Authorization: Bearer <access_token>` and JSON `{\"task\": \"...\"}`.\n\n"
+        f"- Call it like this: `POST {PUBLIC_URL}/search` with "
+        "`Authorization: Bearer <access_token>` and JSON "
+        "`{\"question\": \"...\", \"site\": \"workos\"}` (sites: workos, typesafe).\n\n"
         "---\n\n"
     )
 
@@ -152,7 +176,7 @@ def unauthorized(message: str) -> HTTPException:
 
 
 # Reads "Authorization: Bearer <token>". Using FastAPI's helper also marks
-# /estimate as token-protected in the generated docs (/docs, /openapi.json).
+# /search as token-protected in the generated docs (/docs, /openapi.json).
 # auto_error=False so we send our own 401 with discovery directions.
 bearer = HTTPBearer(auto_error=False, description="A WorkOS agent access token. See /auth.md.")
 
@@ -193,7 +217,7 @@ def verify_token(
         raise HTTPException(
             status_code=403,
             detail={"error": "insufficient_scope",
-                    "message": "This token isn't allowed to use the estimator."},
+                    "message": "This token isn't allowed to use docs search."},
             headers={"WWW-Authenticate": f'Bearer error="insufficient_scope", '
                                          f'resource_metadata="{METADATA_URL}"'},
         )
@@ -241,7 +265,7 @@ def enforce_trial(claims: Annotated[dict, Depends(verify_token)]) -> dict:
     if usage.get(day_key, 0) >= DAILY_TRIAL_CAP:
         raise claim_required("Free trial calls are used up for today.")
     if usage.get(agent_key, 0) >= TRIAL_CALLS:
-        raise claim_required(f"This agent has used its {TRIAL_CALLS} free estimates.")
+        raise claim_required(f"This agent has used its {TRIAL_CALLS} free searches.")
     return claims
 
 
@@ -258,10 +282,16 @@ def count_trial_call(claims: dict) -> int:
     return TRIAL_CALLS - used
 
 
-@web_app.post("/estimate", response_model=EstimateResponse, response_model_exclude_none=True)
-def estimate(body: EstimateRequest, claims: Annotated[dict, Depends(enforce_trial)]):
+@web_app.post("/search", response_model=SearchResponse, response_model_exclude_none=True)
+def search(body: SearchRequest, claims: Annotated[dict, Depends(enforce_trial)]):
     # Reaching here means the token, the trial and the body are all valid.
-    result = estimate_tokens(body.task)
+    try:
+        result = docs_search(body.question, SITES[body.site])
+    except Exception as e:  # a failed search is an error, never an empty answer
+        print(f"search failed: {e!r}")
+        raise HTTPException(status_code=502,
+                            detail="Docs search is unavailable right now. Try again shortly.")
+    # Count the free call only after a successful search.
     if not claims["claimed"]:
         result["free_calls_left"] = count_trial_call(claims)
     return result
@@ -272,13 +302,15 @@ def estimate(body: EstimateRequest, claims: Annotated[dict, Depends(enforce_tria
 image = (
     modal.Image.debian_slim(python_version="3.12")
     .pip_install("fastapi>=0.163.1", "pyjwt[crypto]>=2.15.1")
-    .add_local_python_source("estimator")
+    .add_local_python_source("docs_search")
 )
 
 app = modal.App("token-estimator", image=image)
 
 
-@app.function()
+# TYPESAFE_API_KEY comes from a Modal secret named "typesafe". Create it once:
+#   uv run modal secret create typesafe --env workos-demo TYPESAFE_API_KEY=<key>
+@app.function(secrets=[modal.Secret.from_name("typesafe")])
 @modal.asgi_app()
 def web():
     return web_app
