@@ -18,8 +18,9 @@ from typing import Annotated
 
 import jwt
 import modal
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.responses import PlainTextResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
 from estimator import estimate_tokens
@@ -68,6 +69,21 @@ web_app = FastAPI(
 class EstimateRequest(BaseModel):
     task: str = Field(..., min_length=1, max_length=4_000,
                       description="A description of the coding task.")
+
+
+class EstimateResponse(BaseModel):
+    estimated_tokens: int = Field(description="Estimated tokens the task will take.")
+    model: str = Field(description="Which model produced the estimate.")
+    note: str
+    free_calls_left: int | None = Field(
+        None, description="Free calls left. Only present for unclaimed agents."
+    )
+
+
+@web_app.get("/health")
+def health():
+    """A cheap check that the service is up. No token needed, uses no free calls."""
+    return {"status": "ok"}
 
 
 @web_app.get("/")
@@ -135,17 +151,24 @@ def unauthorized(message: str) -> HTTPException:
     )
 
 
-def verify_token(request: Request) -> dict:
+# Reads "Authorization: Bearer <token>". Using FastAPI's helper also marks
+# /estimate as token-protected in the generated docs (/docs, /openapi.json).
+# auto_error=False so we send our own 401 with discovery directions.
+bearer = HTTPBearer(auto_error=False, description="A WorkOS agent access token. See /auth.md.")
+
+
+def verify_token(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+) -> dict:
     """Check the agent's WorkOS token and return its claims.
 
     401 if the token is missing, forged, expired or meant for someone else.
     403 if it's genuine but lacks a permission for this API.
     """
-    header = request.headers.get("authorization", "")
-    if not header.lower().startswith("bearer ") or not header[7:].strip():
+    if credentials is None or not credentials.credentials.strip():
         raise unauthorized(f"This API needs an access token. Read {PUBLIC_URL}/auth.md "
                            "to register; it's free to try.")
-    token = header[7:].strip()
+    token = credentials.credentials.strip()
 
     try:
         # Find the WorkOS key that signed this token (by its "kid"), then check
@@ -200,33 +223,47 @@ def claim_required(message: str) -> HTTPException:
     )
 
 
-def enforce_trial(claims: Annotated[dict, Depends(verify_token)]) -> dict:
-    """Let claimed agents through; count unclaimed agents' free calls."""
-    if claims["claimed"]:
-        return claims
-
+def trial_keys(claims: dict) -> tuple[str, str]:
     agent_key = f"agent:{claims['sub']}"
     day_key = f"day:{date.today().isoformat()}"  # a new key each day, so it resets itself
+    return agent_key, day_key
 
+
+def enforce_trial(claims: Annotated[dict, Depends(verify_token)]) -> dict:
+    """Refuse unclaimed agents that are out of free calls. Claimed agents pass.
+
+    This only checks. Counting happens in the route, after FastAPI has
+    validated the request body, so a rejected request never costs a call.
+    """
+    if claims["claimed"]:
+        return claims
+    agent_key, day_key = trial_keys(claims)
     if usage.get(day_key, 0) >= DAILY_TRIAL_CAP:
         raise claim_required("Free trial calls are used up for today.")
-    used = usage.get(agent_key, 0)
-    if used >= TRIAL_CALLS:
+    if usage.get(agent_key, 0) >= TRIAL_CALLS:
         raise claim_required(f"This agent has used its {TRIAL_CALLS} free estimates.")
-
-    # Not atomic: two calls at the same instant could both slip through.
-    # Fine for a trial; production would use Redis INCR or a SQL UPDATE.
-    usage[agent_key] = used + 1
-    usage[day_key] = usage.get(day_key, 0) + 1
-    claims["free_calls_left"] = TRIAL_CALLS - used - 1
     return claims
 
 
-@web_app.post("/estimate")
+def count_trial_call(claims: dict) -> int:
+    """Count one free call and return how many are left.
+
+    Not atomic: two calls at the same instant could both slip through.
+    Fine for a trial; production would use Redis INCR or a SQL UPDATE.
+    """
+    agent_key, day_key = trial_keys(claims)
+    used = usage.get(agent_key, 0) + 1
+    usage[agent_key] = used
+    usage[day_key] = usage.get(day_key, 0) + 1
+    return TRIAL_CALLS - used
+
+
+@web_app.post("/estimate", response_model=EstimateResponse, response_model_exclude_none=True)
 def estimate(body: EstimateRequest, claims: Annotated[dict, Depends(enforce_trial)]):
+    # Reaching here means the token, the trial and the body are all valid.
     result = estimate_tokens(body.task)
     if not claims["claimed"]:
-        result["free_calls_left"] = claims["free_calls_left"]
+        result["free_calls_left"] = count_trial_call(claims)
     return result
 
 
