@@ -11,7 +11,7 @@ Run locally:   uv run uvicorn app:web_app --reload
 Dev on Modal:  uv run modal serve --env workos-demo app.py
 Deploy:        uv run modal deploy --env workos-demo app.py
 
-Live URL: https://arjunpatel7-workos-demo--token-estimator-web.us-east.modal.run
+Live URL: https://arjunpatel7-workos-demo--docs-search-web.us-east.modal.run
 """
 
 import os
@@ -43,18 +43,17 @@ AUTHKIT_DOMAIN = os.environ.get(
 )
 # This API's own public address.
 PUBLIC_URL = os.environ.get(
-    "PUBLIC_URL", "https://arjunpatel7-workos-demo--token-estimator-web.us-east.modal.run"
+    "PUBLIC_URL", "https://arjunpatel7-workos-demo--docs-search-web.us-east.modal.run"
 )
 # Your WorkOS client ID. Agent tokens name it as their audience ("aud").
 CLIENT_ID = os.environ.get("WORKOS_CLIENT_ID", "client_01M7GPP0885C97QVK8CAY04YXE")
 
 METADATA_URL = f"{PUBLIC_URL}/.well-known/oauth-protected-resource"
-USER_AGENT = "token-estimator-demo/0.1"
+USER_AGENT = "docs-search-demo/0.1"
 
-# Permissions (set in the WorkOS dashboard) that may call /search. They keep the
-# names from when this was a token estimator; renaming means new WorkOS permissions.
-TRIAL_SCOPE = "estimate:trial"  # unclaimed agents
-FULL_SCOPE = "estimate"         # claimed agents
+# Permissions (set in the WorkOS dashboard) that may call /search.
+TRIAL_SCOPE = "jevsearch-trial"  # unclaimed agents
+FULL_SCOPE = "jevsearch-full"    # claimed agents
 
 # The free trial for unclaimed agents. Change these for a live demo.
 TRIAL_CALLS = int(os.environ.get("TRIAL_CALLS", "3"))           # per agent
@@ -62,7 +61,7 @@ DAILY_TRIAL_CAP = int(os.environ.get("DAILY_TRIAL_CAP", "500"))  # all unclaimed
 
 # Call counts, kept in Modal's shared key-value store so they survive restarts.
 # It behaves like a dict, so tests can swap in a plain {}.
-usage = modal.Dict.from_name("token-estimator-usage", create_if_missing=True)
+usage = modal.Dict.from_name("docs-search-usage", create_if_missing=True)
 
 # Fetches WorkOS's public signing keys once and caches them.
 jwks_client = jwt.PyJWKClient(
@@ -157,10 +156,10 @@ def protected_resource_metadata():
     """Tells agents which server issues tokens for this API (RFC 9728)."""
     return {
         "resource": PUBLIC_URL,
-        "resource_name": "Token Estimator",
+        "resource_name": "Docs Search",
         "authorization_servers": [AUTHKIT_DOMAIN],
         "bearer_methods_supported": ["header"],
-        "scopes_supported": ["estimate:trial", "estimate"],
+        "scopes_supported": [TRIAL_SCOPE, FULL_SCOPE],
     }
 
 
@@ -237,9 +236,12 @@ def claim_required(message: str) -> HTTPException:
         detail={
             "error": "claim_required",
             "message": f"{message} Ask your human to claim you: follow step 3 of "
-                       f"{PUBLIC_URL}/auth.md (they open a link, sign in, and read you a "
-                       "code). Claimed agents have unlimited use. Don't retry until "
-                       "you're claimed.",
+                       f"{PUBLIC_URL}/auth.md. Ask them for their email first; the claim "
+                       "request needs it as login_hint. They open a link, sign in, and "
+                       "read you a code. Claimed agents have unlimited use. Once the "
+                       "claim is complete, get a fresh access token (step 4): your "
+                       "current one still carries trial permissions. Don't retry "
+                       "until then.",
         },
         headers={"WWW-Authenticate": f'Bearer error="insufficient_scope", '
                                      f'scope="{FULL_SCOPE}", '
@@ -282,6 +284,12 @@ def count_trial_call(claims: dict) -> int:
     return TRIAL_CALLS - used
 
 
+# --- Your tool goes here ---
+# Everything above is the reusable agent free trial: discovery, token checks,
+# trial counting and the claim handoff. To put it in front of your own API,
+# swap the docs_search call below (and the request/response models) for your
+# tool, and protect any new route with Depends(enforce_trial).
+
 @web_app.post("/search", response_model=SearchResponse, response_model_exclude_none=True)
 def search(body: SearchRequest, claims: Annotated[dict, Depends(enforce_trial)]):
     # Reaching here means the token, the trial and the body are all valid.
@@ -291,6 +299,8 @@ def search(body: SearchRequest, claims: Annotated[dict, Depends(enforce_trial)])
         print(f"search failed: {e!r}")
         raise HTTPException(status_code=502,
                             detail="Docs search is unavailable right now. Try again shortly.")
+    print(f"search site={body.site} verdict={result['verdict']} score={result['score']} "
+          f"question={body.question!r}")
     # Count the free call only after a successful search.
     if not claims["claimed"]:
         result["free_calls_left"] = count_trial_call(claims)
@@ -305,7 +315,7 @@ image = (
     .add_local_python_source("docs_search")
 )
 
-app = modal.App("token-estimator", image=image)
+app = modal.App("docs-search", image=image)
 
 
 # TYPESAFE_API_KEY comes from a Modal secret named "typesafe". Create it once:

@@ -1,5 +1,7 @@
 # Agent run 1: a fresh Claude Code session (2026-11-17)
 
+> Written when the API was a token-estimator stub (`/estimate`, permissions `estimate:trial` / `estimate`). It's now Docs Search (`/search`, `jevsearch-trial` / `jevsearch-full`); the agent-side findings still apply.
+
 Prompt, in an empty folder: "Evaluate this token estimator API for me and try it out: <URL>". No other hints.
 
 ## What the agent did
