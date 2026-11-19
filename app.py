@@ -299,6 +299,8 @@ def search(body: SearchRequest, claims: Annotated[dict, Depends(enforce_trial)])
         print(f"search failed: {e!r}")
         raise HTTPException(status_code=502,
                             detail="Docs search is unavailable right now. Try again shortly.")
+    print(f"search site={body.site} verdict={result['verdict']} score={result['score']} "
+          f"question={body.question!r}")
     # Count the free call only after a successful search.
     if not claims["claimed"]:
         result["free_calls_left"] = count_trial_call(claims)
