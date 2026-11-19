@@ -40,7 +40,7 @@ In the WorkOS dashboard, for your environment:
    - **Map them by trust level** (Agents → Configuration → Trust level permissions). Put the trial permission under **Untrusted** (anonymous agents) and the full one under **Trusted** (claimed agents). The dashboard may label these unverified and verified.
 
    Renaming a permission means deleting it and creating a new one (the slug can't be edited), then doing both steps again.
-3. **OAuth well-known discovery** (in the Agents configuration): set this API's protected-resource metadata URL.
+3. **Copy two URLs from the Agents configuration page** (both read-only): the **auth.md source**, which `/auth.md` reverse-proxies, and the **authorization server URL**, whose domain goes in `AUTHKIT_DOMAIN`. WorkOS doesn't need to know this API's URL.
 4. **Authentication:** enable a sign-in method the claiming human can use without a password, such as Google or Magic Auth.
 
 ## Run it
