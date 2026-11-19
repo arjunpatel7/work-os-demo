@@ -7,11 +7,11 @@ Agents discover where to sign up (WorkOS AuthKit), every call to /search
 needs a verified WorkOS agent token, and unclaimed agents get a few free
 calls before they must ask their human to claim them.
 
+Settings come from .env (copy .env.example). Then:
+
 Run locally:   uv run uvicorn app:web_app --reload
 Dev on Modal:  uv run modal serve --env workos-demo app.py
 Deploy:        uv run modal deploy --env workos-demo app.py
-
-Live URL: https://arjunpatel7-workos-demo--docs-search-web.us-east.modal.run
 """
 
 import os
@@ -35,18 +35,35 @@ SITES = {
     "typesafe": "https://docs.typesafe.ai/llms.txt",
 }
 
-# --- Settings (public addresses, not secrets) ---
+# --- Settings, from .env (see .env.example) ---
+
+def load_env_file() -> None:
+    """For local runs, read .env next to this file. On Modal, the same values
+    arrive as environment variables instead (see the bottom of this file)."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.exists(path):
+        return
+    for line in open(path):
+        name, sep, value = line.strip().partition("=")
+        if sep and not name.startswith("#"):
+            os.environ.setdefault(name.strip(), value.strip().strip("\"'"))
+
+
+def setting(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"Set {name} in .env (see .env.example)")
+    return value.rstrip("/")
+
+
+load_env_file()
 
 # Where agents sign up: your WorkOS AuthKit domain.
-AUTHKIT_DOMAIN = os.environ.get(
-    "AUTHKIT_DOMAIN", "https://fortunate-aroma-74-staging.authkit.app"
-)
+AUTHKIT_DOMAIN = setting("AUTHKIT_DOMAIN")
 # This API's own public address.
-PUBLIC_URL = os.environ.get(
-    "PUBLIC_URL", "https://arjunpatel7-workos-demo--docs-search-web.us-east.modal.run"
-)
+PUBLIC_URL = setting("PUBLIC_URL")
 # Your WorkOS client ID. Agent tokens name it as their audience ("aud").
-CLIENT_ID = os.environ.get("WORKOS_CLIENT_ID", "client_01M7GPP0885C97QVK8CAY04YXE")
+CLIENT_ID = setting("WORKOS_CLIENT_ID")
 
 METADATA_URL = f"{PUBLIC_URL}/.well-known/oauth-protected-resource"
 USER_AGENT = "docs-search-demo/0.1"
@@ -318,9 +335,9 @@ image = (
 app = modal.App("docs-search", image=image)
 
 
-# TYPESAFE_API_KEY comes from a Modal secret named "typesafe". Create it once:
-#   uv run modal secret create typesafe --env workos-demo TYPESAFE_API_KEY=<key>
-@app.function(secrets=[modal.Secret.from_name("typesafe")])
+# Modal reads .env when you deploy and passes its values to the server as
+# environment variables, including TYPESAFE_API_KEY.
+@app.function(secrets=[modal.Secret.from_dotenv(__file__)])
 @modal.asgi_app()
 def web():
     return web_app
