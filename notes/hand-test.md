@@ -1,5 +1,7 @@
 # Hand test: Agent Registration in Staging (2026-11-15)
 
+> Written when the API was a token-estimator stub, with permissions `estimate:trial` / `estimate`. They're now `jevsearch-trial` / `jevsearch-full`; everything else here still applies.
+
 One agent registered anonymously with curl, claimed by a person, and both access tokens decoded.
 
 ## Environment

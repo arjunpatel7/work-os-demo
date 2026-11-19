@@ -11,7 +11,7 @@ Run locally:   uv run uvicorn app:web_app --reload
 Dev on Modal:  uv run modal serve --env workos-demo app.py
 Deploy:        uv run modal deploy --env workos-demo app.py
 
-Live URL: https://arjunpatel7-workos-demo--token-estimator-web.us-east.modal.run
+Live URL: https://arjunpatel7-workos-demo--docs-search-web.us-east.modal.run
 """
 
 import os
@@ -43,7 +43,7 @@ AUTHKIT_DOMAIN = os.environ.get(
 )
 # This API's own public address.
 PUBLIC_URL = os.environ.get(
-    "PUBLIC_URL", "https://arjunpatel7-workos-demo--token-estimator-web.us-east.modal.run"
+    "PUBLIC_URL", "https://arjunpatel7-workos-demo--docs-search-web.us-east.modal.run"
 )
 # Your WorkOS client ID. Agent tokens name it as their audience ("aud").
 CLIENT_ID = os.environ.get("WORKOS_CLIENT_ID", "client_01M7GPP0885C97QVK8CAY04YXE")
@@ -61,7 +61,7 @@ DAILY_TRIAL_CAP = int(os.environ.get("DAILY_TRIAL_CAP", "500"))  # all unclaimed
 
 # Call counts, kept in Modal's shared key-value store so they survive restarts.
 # It behaves like a dict, so tests can swap in a plain {}.
-usage = modal.Dict.from_name("token-estimator-usage", create_if_missing=True)
+usage = modal.Dict.from_name("docs-search-usage", create_if_missing=True)
 
 # Fetches WorkOS's public signing keys once and caches them.
 jwks_client = jwt.PyJWKClient(
@@ -315,7 +315,7 @@ image = (
     .add_local_python_source("docs_search")
 )
 
-app = modal.App("token-estimator", image=image)
+app = modal.App("docs-search", image=image)
 
 
 # TYPESAFE_API_KEY comes from a Modal secret named "typesafe". Create it once:
